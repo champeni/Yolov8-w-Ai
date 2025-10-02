@@ -1,0 +1,35 @@
+import streamlit as st
+from openai import OpenAI
+
+# Initialize OpenAI client
+client = OpenAI(base_url='http://localhost:8501/v1', api_key='not-needed')
+
+# Streamlit app
+st.title("Chat with Local AI")
+
+# Input field for user message
+user_message = st.text_input("Type your message:", placeholder="Ask me anything...")
+
+# Button to submit the message
+if st.button("Send"):
+    if user_message.strip():  # Check if the input is not empty
+        with st.spinner("Generating response..."):
+            try:
+                # Call the AI model
+                response = client.chat.completions.create(
+                    model="local_model",
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant"},
+                        {"role": "user", "content": user_message},
+                    ],
+                    temperature=0.5,
+                )
+
+                # Display the response
+                assistant_message = response.choices[0].message.content
+                st.success("Assistant's Response:")
+                st.write(assistant_message)
+            except Exception as e:
+                st.error(f"Error: {e}")
+    else:
+        st.warning("Please type a message before sending.")
