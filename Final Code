@@ -1,0 +1,101 @@
+import streamlit as st
+import cv2
+from PIL import Image
+import torch
+from ultralytics import YOLO
+import numpy as np
+import requests
+
+# LM Studio API Settings
+LM_STUDIO_URL = "http://localhost:8501/v1/chat/completions"
+LM_MODEL_NAME = "local_model"
+
+# Load the custom YOLO model
+@st.cache_resource
+def load_model():
+    model = YOLO("best.pt")  # Replace with your custom YOLO model path
+    return model
+
+model = load_model()
+
+# Function to make predictions using the YOLO model
+def make_prediction(img):
+    results = model(img)
+    detections = results[0]
+    boxes = detections.boxes.xyxy.cpu().numpy()  # Bounding box coordinates
+    labels = [model.names[int(cls)] for cls in detections.boxes.cls.cpu().numpy()]  # Class labels
+    return {"boxes": boxes, "labels": labels}
+
+# Function to draw bounding boxes on the image
+def create_image_with_bboxes(img, prediction):
+    for box, label in zip(prediction["boxes"], prediction["labels"]):
+        x1, y1, x2, y2 = map(int, box)
+        color = (0, 255, 0) if label != "person" else (255, 0, 0)  # Red for "person," green otherwise
+        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+        cv2.putText(img, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    return img
+
+# Function to get AI-generated descriptions
+def get_ai_description(detected_objects):
+    prompt = f"Describe the following objects: {', '.join(detected_objects)}"
+    payload = {
+        "model": LM_MODEL_NAME,
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.5,
+    }
+    try:
+        response = requests.post(LM_STUDIO_URL, json=payload)
+        response.raise_for_status()
+        ai_response = response.json()
+        return ai_response["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"Error generating AI description: {str(e)}"
+
+# Streamlit App Layout
+st.title("Real-Time Object Detection with AI Descriptions")
+run_webcam = st.checkbox("Run Webcam", key="run_webcam")
+frame_window = st.image([])  # For displaying the webcam feed
+ai_description_area = st.empty()  # For AI-generated descriptions
+
+if run_webcam:
+    cap = cv2.VideoCapture(0)  # Open the default webcam
+
+    while st.session_state.get("run_webcam", True):  # Session state ensures smooth reruns
+        ret, frame = cap.read()
+        if not ret:
+            st.warning("Failed to capture frame from webcam.")
+            break
+
+        # Process the webcam frame
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # Make predictions
+        prediction = make_prediction(frame_rgb)
+
+        # Draw bounding boxes
+        img_with_bbox = create_image_with_bboxes(frame_rgb.copy(), prediction)
+
+        # Display the processed frame
+        frame_window.image(img_with_bbox, channels="RGB")
+
+        # Generate AI description for detected objects
+        detected_objects = set(prediction["labels"])
+        if detected_objects:
+            ai_description = get_ai_description(detected_objects)
+        else:
+            ai_description = "No objects detected."
+
+        # Display the AI-generated description
+        ai_description_area.text(f"AI Description: {ai_description}")
+
+        # Update the checkbox to stop the webcam
+        run_webcam = st.checkbox("Run Webcam", value=True, key="stop_webcam_update")
+        if not run_webcam:
+            st.session_state["run_webcam"] = False
+
+    # Release resources when the webcam is stopped
+    cap.release()
+    cv2.destroyAllWindows()
